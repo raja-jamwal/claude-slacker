@@ -408,6 +408,8 @@ app.message(async ({ message, client }) => {
   let deltaCount = 0;
   let buffer = "";
   let stopped = false;
+  let done = false;
+  let lastUpdatePromise = Promise.resolve();
   const startTime = Date.now();
 
   log(channelId, `Claude process started: pid=${proc.pid}, session=${sessionId}, resume=${isResume}`);
@@ -449,11 +451,11 @@ app.message(async ({ message, client }) => {
 
             // Throttle Slack updates — include Stop button while streaming
             const now = Date.now();
-            if (now - lastUpdateTime >= UPDATE_INTERVAL_MS) {
+            if (!done && now - lastUpdateTime >= UPDATE_INTERVAL_MS) {
               lastUpdateTime = now;
               updateCount++;
               log(channelId, `chat.update #${updateCount}: ${accumulatedText.length} chars, elapsed=${now - startTime}ms`);
-              client.chat
+              lastUpdatePromise = client.chat
                 .update({
                   channel: channelId,
                   ts: messageTs,
@@ -500,6 +502,7 @@ app.message(async ({ message, client }) => {
   });
 
   proc.on("close", async (code, signal) => {
+    done = true;
     activeProcesses.delete(threadTs);
     stopped = signal === "SIGTERM";
     const elapsed = Date.now() - startTime;
@@ -515,6 +518,9 @@ app.message(async ({ message, client }) => {
     } else {
       finalText = accumulatedText || (code !== 0 ? "Something went wrong." : "No response.");
     }
+
+    // Wait for any in-flight throttled update to settle before sending final
+    await lastUpdatePromise;
 
     // Final update — remove Stop button
     log(channelId, `Sending final chat.update (${finalText.length} chars, stop button removed)`);
